@@ -1,0 +1,48 @@
+version: "3.9"
+
+# Local development compose — uses your AWS credentials from the host
+# to call Bedrock directly from the backend container.
+#
+# Prerequisites:
+#   - AWS credentials configured locally (profile or env vars)
+#   - Bedrock Claude model access enabled in your AWS account
+#
+# Usage:
+#   docker compose up --build
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: modernizer-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DEFAULT_MODEL_ID: ${DEFAULT_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      # Pass host AWS credentials into container for local dev
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_PROFILE: ${AWS_PROFILE:-}
+    volumes:
+      # Mount AWS config for profile-based auth
+      - ${HOME}/.aws:/home/appuser/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: modernizer-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
