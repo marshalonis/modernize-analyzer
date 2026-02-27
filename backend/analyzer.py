@@ -88,29 +88,37 @@ _DONE = object()
 class _StreamingHandler:
     """
     Passed to the Strands Agent as callback_handler.
+    Strands calls this as a function with keyword arguments.
     Puts (event_type, data) tuples into a Queue so the async generator
     can forward them to the SSE stream.
+
+    Strands kwargs of interest:
+      data              – streaming text token
+      complete          – True when the current message turn is complete
+      current_tool_use  – dict with 'name' and 'input' when a tool is invoked
+      tool_result_message – present when a tool has returned
     """
 
     def __init__(self, q: Queue) -> None:
         self._q = q
 
-    # Called for each streamed token from the model
-    def on_llm_new_token(self, token: str, **_) -> None:
-        if token:
-            self._q.put(("chunk", token))
+    def __call__(self, **kwargs) -> None:
+        # Streaming text token
+        data = kwargs.get("data")
+        if data:
+            self._q.put(("chunk", data))
+            return
 
-    # Called when a tool is about to be invoked
-    def on_tool_start(self, tool_name: str, tool_input: dict, **_) -> None:
-        self._q.put(("tool_use", f"Running tool: {tool_name}"))
+        # Tool invocation
+        tool = kwargs.get("current_tool_use")
+        if tool and isinstance(tool, dict) and not kwargs.get("complete"):
+            tool_name = tool.get("name", "tool")
+            self._q.put(("tool_use", f"Running tool: {tool_name}"))
+            return
 
-    # Called when a tool returns
-    def on_tool_end(self, tool_name: str, tool_result, **_) -> None:
-        self._q.put(("tool_result", f"{tool_name} completed"))
-
-    # Called when the agent finishes (fallback: capture full result text)
-    def on_end(self, result=None, **_) -> None:
-        pass  # result text is captured in run_agent() return value
+        # Tool result
+        if kwargs.get("tool_result_message") is not None:
+            self._q.put(("tool_result", "Tool completed"))
 
 
 # ---------------------------------------------------------------------------
