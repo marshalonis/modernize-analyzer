@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <!--
+    Whitelisted source IP ranges allowed to reach the frontend ALB.
+    Add one <cidr> entry per allowed address or range.
+    Both port 80 and 443 are opened for each entry.
+
+    Examples:
+      Single IP:   203.0.113.42/32
+      Office CIDR: 203.0.113.0/24
+  -->
+  <frontend_alb>
+    <allowed_cidrs>
+      <cidr description="My office">203.0.113.0/24</cidr>
+      <cidr description="VPN egress">198.51.100.10/32</cidr>
+    </allowed_cidrs>
+  </frontend_alb>
+</config>
