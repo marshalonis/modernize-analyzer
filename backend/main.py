@@ -3,6 +3,8 @@ FastAPI backend for the modernization analyzer.
 Exposes a streaming SSE endpoint consumed by the Streamlit frontend.
 """
 import os
+import time
+import boto3
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,27 +99,53 @@ async def analyze(request: AnalyzeRequest):
     )
 
 
+_MODELS_CACHE: dict = {}
+_CACHE_TTL = 300  # seconds
+
+_FALLBACK_MODELS = [
+    {"id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "label": "Claude Sonnet 4.5 (default)"},
+    {"id": "us.anthropic.claude-opus-4-5-20251001-v1:0",   "label": "Claude Opus 4.5 (most capable)"},
+    {"id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",  "label": "Claude Haiku 4.5 (faster / cheaper)"},
+]
+
+
+def _fetch_inference_profiles() -> list[dict]:
+    """Query Bedrock for active, system-defined Anthropic inference profiles."""
+    client = boto3.client("bedrock", region_name=AWS_REGION)
+    profiles = []
+    kwargs: dict = {"typeEquals": "SYSTEM_DEFINED"}
+    while True:
+        resp = client.list_inference_profiles(**kwargs)
+        for p in resp.get("inferenceProfileSummaries", []):
+            if p.get("status") != "ACTIVE":
+                continue
+            pid = p.get("inferenceProfileId", "")
+            if "anthropic" not in pid:
+                continue
+            profiles.append({"id": pid, "label": p.get("inferenceProfileName", pid)})
+        next_token = resp.get("nextToken")
+        if not next_token:
+            break
+        kwargs["nextToken"] = next_token
+    return profiles
+
+
+def _get_models() -> list[dict]:
+    now = time.monotonic()
+    if _MODELS_CACHE.get("expires", 0) > now:
+        return _MODELS_CACHE["models"]
+    try:
+        models = _fetch_inference_profiles()
+        if models:
+            _MODELS_CACHE["models"] = models
+            _MODELS_CACHE["expires"] = now + _CACHE_TTL
+            return models
+    except Exception:
+        pass
+    return _FALLBACK_MODELS
+
+
 @app.get("/models")
 def list_models():
-    """Return the available Bedrock Claude model IDs."""
-    return {
-        "default": DEFAULT_MODEL_ID,
-        "available": [
-            {
-                "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                "label": "Claude Sonnet 4.5 (default)",
-            },
-            {
-                "id": "us.anthropic.claude-opus-4-5-20251001-v1:0",
-                "label": "Claude Opus 4.5 (most capable)",
-            },
-            {
-                "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                "label": "Claude Haiku 4.5 (faster / cheaper)",
-            },
-            {
-                "id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-                "label": "Claude 3.5 Sonnet",
-            },
-        ],
-    }
+    """Return available Bedrock Claude inference profile IDs, queried live from Bedrock."""
+    return {"default": DEFAULT_MODEL_ID, "available": _get_models()}
