@@ -16,7 +16,7 @@ from analyzer import run_analysis
 
 DEFAULT_MODEL_ID = os.getenv(
     "DEFAULT_MODEL_ID",
-    "us.anthropic.claude-sonnet-4-5-20251001-v1:0",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 )
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
@@ -104,7 +104,7 @@ def list_models():
         "default": DEFAULT_MODEL_ID,
         "available": [
             {
-                "id": "us.anthropic.claude-sonnet-4-5-20251001-v1:0",
+                "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 "label": "Claude Sonnet 4.5 (default)",
             },
             {
