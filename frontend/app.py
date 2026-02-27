@@ -115,6 +115,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     gitlab_url = st.text_input(
         "GitLab Repository URL",
+        value="https://github.com/marshalonis/modernize-analyzer.git",
         placeholder="https://gitlab.com/your-org/your-repo.git  or  git@gitlab.com:your-org/your-repo.git",
     )
 
