@@ -35,12 +35,12 @@ def fetch_available_models() -> tuple[list[dict], str]:
              "label": "Claude 3.5 Sonnet (recommended)"}], ""
 
 
-def stream_analysis(payload: dict):
+def stream_events(endpoint: str, payload: dict):
     """
-    POST to /analyze and yield parsed SSE events as (event_type, data) tuples.
+    POST to `endpoint` and yield parsed SSE events as (event_type, data) tuples.
     """
     with requests.post(
-        f"{BACKEND_URL}/analyze",
+        f"{BACKEND_URL}{endpoint}",
         json=payload,
         stream=True,
         timeout=600,
@@ -101,24 +101,22 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# Main — input form
+# Main title
 # ---------------------------------------------------------------------------
 
 st.title("🔬 Code Modernization Analyzer")
-st.markdown(
-    "Provide your GitLab repository details below. The AI agent will clone the repo, "
-    "inspect the codebase, and produce a detailed modernization report."
-)
+
+# ---------------------------------------------------------------------------
+# Shared repo inputs (used by both tabs)
+# ---------------------------------------------------------------------------
 
 col1, col2 = st.columns([3, 1])
-
 with col1:
     gitlab_url = st.text_input(
         "GitLab Repository URL",
         value="https://github.com/marshalonis/modernize-analyzer.git",
         placeholder="https://gitlab.com/your-org/your-repo.git  or  git@gitlab.com:your-org/your-repo.git",
     )
-
 with col2:
     branch = st.text_input("Branch", value="main")
 
@@ -145,80 +143,191 @@ else:
     )
 
 st.caption(f"Selected model: `{selected_model_id}`")
-
-run_btn = st.button("▶ Run Analysis", type="primary", use_container_width=True)
+st.divider()
 
 # ---------------------------------------------------------------------------
-# Analysis execution
+# Tabs — Analysis vs Chat
 # ---------------------------------------------------------------------------
 
-if run_btn:
-    if not gitlab_url.strip():
-        st.error("Please enter a GitLab repository URL.")
-        st.stop()
-    if not credential.strip():
-        st.error("Please provide authentication credentials.")
-        st.stop()
+tab_analysis, tab_chat = st.tabs(["📋 Run Analysis", "💬 Ask a Question"])
 
-    payload = {
-        "gitlab_url": gitlab_url.strip(),
-        "auth_type": auth_type,
-        "credential": credential.strip(),
-        "branch": branch.strip() or "main",
-        "model_id": selected_model_id,
-    }
 
-    st.divider()
-    st.subheader("Analysis Progress")
+# ── Analysis tab ────────────────────────────────────────────────────────────
 
-    status_placeholder = st.empty()
-    tool_placeholder = st.empty()
-    report_container = st.container()
+with tab_analysis:
+    st.markdown(
+        "Run a full modernization analysis. The AI agent will clone the repo, "
+        "inspect the codebase, and produce a detailed modernization report."
+    )
 
-    with report_container:
-        report_placeholder = st.empty()
+    run_btn = st.button("▶ Run Analysis", type="primary", use_container_width=True)
 
-    accumulated_report = []
-    final_report = None
+    if run_btn:
+        if not gitlab_url.strip():
+            st.error("Please enter a repository URL.")
+            st.stop()
+        if not credential.strip():
+            st.error("Please provide authentication credentials.")
+            st.stop()
 
-    try:
-        with st.spinner("Connecting to backend..."):
-            events = stream_analysis(payload)
+        payload = {
+            "gitlab_url": gitlab_url.strip(),
+            "auth_type": auth_type,
+            "credential": credential.strip(),
+            "branch": branch.strip() or "main",
+            "model_id": selected_model_id,
+        }
 
-        for event_type, data in events:
-            if event_type == "status":
-                status_placeholder.info(f"⏳ {data}")
-            elif event_type == "tool_use":
-                tool_placeholder.caption(f"🔧 {data}")
-            elif event_type == "tool_result":
-                tool_placeholder.caption("✅ Tool completed")
-            elif event_type == "chunk":
-                accumulated_report.append(data)
-                report_placeholder.markdown("".join(accumulated_report))
-            elif event_type == "done":
-                final_report = data
-                status_placeholder.success("✅ Analysis complete!")
-                tool_placeholder.empty()
-                report_placeholder.markdown(final_report or "".join(accumulated_report))
-            elif event_type == "error":
-                status_placeholder.error(f"❌ {data}")
-                break
-
-    except requests.exceptions.ConnectionError:
-        st.error(
-            f"Cannot connect to the analysis backend at `{BACKEND_URL}`. "
-            "Check that the backend service is running."
-        )
-    except Exception as exc:
-        st.error(f"Unexpected error: {exc}")
-
-    # Download button
-    report_text = final_report or "".join(accumulated_report)
-    if report_text:
         st.divider()
-        st.download_button(
-            label="⬇ Download Report (Markdown)",
-            data=report_text,
-            file_name="modernization_report.md",
-            mime="text/markdown",
-        )
+        st.subheader("Analysis Progress")
+
+        status_placeholder = st.empty()
+        tool_placeholder = st.empty()
+        report_container = st.container()
+
+        with report_container:
+            report_placeholder = st.empty()
+
+        accumulated_report = []
+        final_report = None
+
+        try:
+            with st.spinner("Connecting to backend..."):
+                events = stream_events("/analyze", payload)
+
+            for event_type, data in events:
+                if event_type == "status":
+                    status_placeholder.info(f"⏳ {data}")
+                elif event_type == "tool_use":
+                    tool_placeholder.caption(f"🔧 {data}")
+                elif event_type == "tool_result":
+                    tool_placeholder.caption("✅ Tool completed")
+                elif event_type == "chunk":
+                    accumulated_report.append(data)
+                    report_placeholder.markdown("".join(accumulated_report))
+                elif event_type == "done":
+                    final_report = data
+                    status_placeholder.success("✅ Analysis complete!")
+                    tool_placeholder.empty()
+                    report_placeholder.markdown(final_report or "".join(accumulated_report))
+                elif event_type == "error":
+                    status_placeholder.error(f"❌ {data}")
+                    break
+
+        except requests.exceptions.ConnectionError:
+            st.error(
+                f"Cannot connect to the analysis backend at `{BACKEND_URL}`. "
+                "Check that the backend service is running."
+            )
+        except Exception as exc:
+            st.error(f"Unexpected error: {exc}")
+
+        report_text = final_report or "".join(accumulated_report)
+        if report_text:
+            st.divider()
+            st.download_button(
+                label="⬇ Download Report (Markdown)",
+                data=report_text,
+                file_name="modernization_report.md",
+                mime="text/markdown",
+            )
+
+
+# ── Chat tab ─────────────────────────────────────────────────────────────────
+
+with tab_chat:
+    st.markdown(
+        "Ask a specific question about the repository. "
+        "The AI agent will explore the code and answer directly."
+    )
+    st.markdown("**Example questions:**")
+    st.markdown(
+        "- Does the source code have unit tests?\n"
+        "- What database does this project use?\n"
+        "- How is authentication handled?\n"
+        "- What are the main API endpoints?\n"
+        "- Is there a CI/CD pipeline configured?"
+    )
+
+    # Conversation history stored in session state
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []  # list of {"role": "user"|"assistant", "content": str}
+
+    # Render existing conversation
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Question input
+    question = st.chat_input("Ask a question about the repository...")
+
+    if question:
+        if not gitlab_url.strip():
+            st.error("Please enter a repository URL above.")
+            st.stop()
+        if not credential.strip():
+            st.error("Please provide authentication credentials above.")
+            st.stop()
+
+        # Show user message immediately
+        st.session_state.chat_history.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        payload = {
+            "gitlab_url": gitlab_url.strip(),
+            "auth_type": auth_type,
+            "credential": credential.strip(),
+            "branch": branch.strip() or "main",
+            "model_id": selected_model_id,
+            "question": question,
+        }
+
+        # Stream the assistant response
+        with st.chat_message("assistant"):
+            status_ph = st.empty()
+            tool_ph = st.empty()
+            answer_ph = st.empty()
+
+            accumulated = []
+            final_answer = None
+
+            try:
+                for event_type, data in stream_events("/chat", payload):
+                    if event_type == "status":
+                        status_ph.caption(f"⏳ {data}")
+                    elif event_type == "tool_use":
+                        tool_ph.caption(f"🔧 {data}")
+                    elif event_type == "tool_result":
+                        tool_ph.caption("✅ Tool completed")
+                    elif event_type == "chunk":
+                        accumulated.append(data)
+                        answer_ph.markdown("".join(accumulated))
+                    elif event_type == "done":
+                        final_answer = data
+                        status_ph.empty()
+                        tool_ph.empty()
+                        answer_ph.markdown(final_answer or "".join(accumulated))
+                    elif event_type == "error":
+                        status_ph.error(f"❌ {data}")
+                        break
+
+            except requests.exceptions.ConnectionError:
+                st.error(
+                    f"Cannot connect to the backend at `{BACKEND_URL}`. "
+                    "Check that the backend service is running."
+                )
+            except Exception as exc:
+                st.error(f"Unexpected error: {exc}")
+
+            answer_text = final_answer or "".join(accumulated)
+            if answer_text:
+                st.session_state.chat_history.append(
+                    {"role": "assistant", "content": answer_text}
+                )
+
+    # Button to clear conversation history
+    if st.session_state.chat_history:
+        if st.button("🗑 Clear conversation", key="clear_chat"):
+            st.session_state.chat_history = []
+            st.rerun()

@@ -23,7 +23,7 @@ from tools import (
 # System prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are an expert software modernization consultant with deep knowledge of:
+ANALYSIS_SYSTEM_PROMPT = """You are an expert software modernization consultant with deep knowledge of:
 - Modern software architecture patterns (microservices, serverless, event-driven)
 - Frontend frameworks and UI/UX best practices
 - Backend technologies, APIs, and database patterns
@@ -72,6 +72,20 @@ Structure your final output as a clear markdown report with:
 - **Estimated Effort** (rough T-shirt sizing per recommendation)
 
 Be specific. Reference actual file names and code patterns you observed. Avoid generic advice.
+"""
+
+CHAT_SYSTEM_PROMPT = """You are an expert software engineer helping users understand a codebase.
+You have tools to clone and inspect a Git repository.
+
+When answering questions:
+1. Clone the repository first using the provided credentials
+2. Use the available tools to explore the relevant parts of the codebase needed to answer the question
+3. Give a clear, specific answer based on what you actually find in the code
+4. Reference actual file names and line numbers when relevant
+5. Be concise but thorough — answer the question directly, don't produce a full analysis report
+6. Clean up the repository when done
+
+Only explore the parts of the codebase relevant to the question asked.
 """
 
 # Shared thread pool for blocking agent calls
@@ -130,6 +144,7 @@ def _run_agent_sync(
     aws_region: str,
     prompt: str,
     q: Queue,
+    system_prompt: str = ANALYSIS_SYSTEM_PROMPT,
 ) -> str:
     """
     Builds and runs the Strands agent synchronously.
@@ -148,7 +163,7 @@ def _run_agent_sync(
             detect_tech_stack,
             cleanup_repository,
         ],
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         callback_handler=handler,
     )
 
@@ -198,6 +213,7 @@ async def run_analysis(
         aws_region,
         prompt,
         q,
+        ANALYSIS_SYSTEM_PROMPT,
     )
 
     yield sse("status", "Agent started — cloning repository...")
@@ -238,5 +254,82 @@ async def run_analysis(
     # If the model streamed tokens via on_llm_new_token, collected already has the
     # full text. If not (some Bedrock configs don't stream at token level),
     # full_result from the agent return value is the authoritative source.
+    final_text = "".join(collected) if collected else full_result
+    yield sse("done", final_text)
+
+
+async def run_chat(
+    gitlab_url: str,
+    auth_type: str,
+    credential: str,
+    model_id: str,
+    aws_region: str,
+    question: str,
+    branch: str = "main",
+) -> AsyncIterator[str]:
+    """
+    Answer a free-form question about a repository and yield SSE-formatted strings.
+    Each yielded value is a complete 'data: ...\\n\\n' SSE event.
+    """
+
+    def sse(event: str, data: str) -> str:
+        return f"data: {json.dumps({'event': event, 'data': data})}\n\n"
+
+    yield sse("status", "Initializing chat agent...")
+
+    prompt = (
+        f"The Git repository is at: {gitlab_url}\n"
+        f"Authentication type: {auth_type}\n"
+        f"Credential: {credential}\n"
+        f"Branch: {branch}\n\n"
+        f"Question: {question}\n\n"
+        "Clone the repository, explore the relevant code needed to answer the question, "
+        "provide a clear and specific answer, then clean up the repository."
+    )
+
+    q: Queue = Queue()
+    loop = asyncio.get_event_loop()
+
+    future = loop.run_in_executor(
+        _executor,
+        _run_agent_sync,
+        model_id,
+        aws_region,
+        prompt,
+        q,
+        CHAT_SYSTEM_PROMPT,
+    )
+
+    yield sse("status", "Agent started — exploring repository...")
+
+    collected: list[str] = []
+    while not future.done():
+        drained = 0
+        while drained < 20:
+            try:
+                event_type, data = q.get_nowait()
+                if event_type == "chunk":
+                    collected.append(data)
+                yield sse(event_type, data)
+                drained += 1
+            except Empty:
+                break
+        await asyncio.sleep(0.05)
+
+    while not q.empty():
+        try:
+            event_type, data = q.get_nowait()
+            if event_type == "chunk":
+                collected.append(data)
+            yield sse(event_type, data)
+        except Empty:
+            break
+
+    try:
+        full_result = await future
+    except Exception as exc:
+        yield sse("error", f"Chat failed: {exc}")
+        return
+
     final_text = "".join(collected) if collected else full_result
     yield sse("done", final_text)
