@@ -13,7 +13,7 @@ import streamlit as st
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(
-    page_title="Code Modernization Analyzer",
+    page_title="Cornhole",
     page_icon="🫖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -133,7 +133,7 @@ with st.sidebar:
 # Main title
 # ---------------------------------------------------------------------------
 
-st.title("🔬 Code Modernization Analyzer")
+st.title("🫖 Source Code Analyzer")
 
 # ---------------------------------------------------------------------------
 # Shared repo inputs (used by both tabs)
