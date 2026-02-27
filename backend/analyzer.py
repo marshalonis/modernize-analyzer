@@ -1,19 +1,22 @@
 """
 Strands agent that orchestrates modernization analysis.
 """
-import os
+import asyncio
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, Queue
 from typing import AsyncIterator
 
 from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 from tools import (
+    cleanup_repository,
     clone_repository,
+    detect_tech_stack,
     list_repository_files,
     read_file_content,
-    detect_tech_stack,
-    cleanup_repository,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,46 +74,62 @@ Structure your final output as a clear markdown report with:
 Be specific. Reference actual file names and code patterns you observed. Avoid generic advice.
 """
 
-# ---------------------------------------------------------------------------
-# Model factory
-# ---------------------------------------------------------------------------
+# Shared thread pool for blocking agent calls
+_executor = ThreadPoolExecutor(max_workers=4)
 
-def build_model(model_id: str, region: str) -> BedrockModel:
-    return BedrockModel(
-        model_id=model_id,
-        region_name=region,
-        # streaming is enabled by default in Strands BedrockModel
-    )
+# Sentinel to signal the queue is done
+_DONE = object()
 
 
 # ---------------------------------------------------------------------------
-# Analysis runner
+# Callback handler — bridges Strands sync callbacks → async queue
 # ---------------------------------------------------------------------------
 
-async def run_analysis(
-    gitlab_url: str,
-    auth_type: str,
-    credential: str,
+class _StreamingHandler:
+    """
+    Passed to the Strands Agent as callback_handler.
+    Puts (event_type, data) tuples into a Queue so the async generator
+    can forward them to the SSE stream.
+    """
+
+    def __init__(self, q: Queue) -> None:
+        self._q = q
+
+    # Called for each streamed token from the model
+    def on_llm_new_token(self, token: str, **_) -> None:
+        if token:
+            self._q.put(("chunk", token))
+
+    # Called when a tool is about to be invoked
+    def on_tool_start(self, tool_name: str, tool_input: dict, **_) -> None:
+        self._q.put(("tool_use", f"Running tool: {tool_name}"))
+
+    # Called when a tool returns
+    def on_tool_end(self, tool_name: str, tool_result, **_) -> None:
+        self._q.put(("tool_result", f"{tool_name} completed"))
+
+    # Called when the agent finishes (fallback: capture full result text)
+    def on_end(self, result=None, **_) -> None:
+        pass  # result text is captured in run_agent() return value
+
+
+# ---------------------------------------------------------------------------
+# Blocking agent runner (executed in thread pool)
+# ---------------------------------------------------------------------------
+
+def _run_agent_sync(
     model_id: str,
     aws_region: str,
-    branch: str = "main",
-) -> AsyncIterator[str]:
+    prompt: str,
+    q: Queue,
+) -> str:
     """
-    Run the modernization analysis and yield SSE-formatted chunks.
-    Each yielded string is a complete 'data: ...\n\n' SSE event.
+    Builds and runs the Strands agent synchronously.
+    Streaming tokens are pushed to `q` via the callback handler.
+    Returns the full result text as a string.
     """
-
-    def sse(event: str, data: str) -> str:
-        payload = json.dumps({"event": event, "data": data})
-        return f"data: {payload}\n\n"
-
-    yield sse("status", "Initializing analysis agent...")
-
-    try:
-        model = build_model(model_id, aws_region)
-    except Exception as exc:
-        yield sse("error", f"Failed to initialize model: {exc}")
-        return
+    model = BedrockModel(model_id=model_id, region_name=aws_region)
+    handler = _StreamingHandler(q)
 
     agent = Agent(
         model=model,
@@ -122,7 +141,34 @@ async def run_analysis(
             cleanup_repository,
         ],
         system_prompt=SYSTEM_PROMPT,
+        callback_handler=handler,
     )
+
+    result = agent(prompt)
+    return str(result)
+
+
+# ---------------------------------------------------------------------------
+# Public async generator
+# ---------------------------------------------------------------------------
+
+async def run_analysis(
+    gitlab_url: str,
+    auth_type: str,
+    credential: str,
+    model_id: str,
+    aws_region: str,
+    branch: str = "main",
+) -> AsyncIterator[str]:
+    """
+    Run the modernization analysis and yield SSE-formatted strings.
+    Each yielded value is a complete 'data: ...\\n\\n' SSE event.
+    """
+
+    def sse(event: str, data: str) -> str:
+        return f"data: {json.dumps({'event': event, 'data': data})}\n\n"
+
+    yield sse("status", "Initializing analysis agent...")
 
     prompt = (
         f"Please analyze the GitLab repository at: {gitlab_url}\n"
@@ -133,23 +179,56 @@ async def run_analysis(
         "following the instructions in your system prompt. Clean up the repository when done."
     )
 
+    q: Queue = Queue()
+    loop = asyncio.get_event_loop()
+
+    # Submit the blocking agent call to the thread pool
+    future = loop.run_in_executor(
+        _executor,
+        _run_agent_sync,
+        model_id,
+        aws_region,
+        prompt,
+        q,
+    )
+
     yield sse("status", "Agent started — cloning repository...")
 
-    # Strands Agent supports streaming via async iteration
+    # Drain the queue while the agent runs in the background thread
+    collected: list[str] = []
+    while not future.done():
+        # Non-blocking drain: pull up to 20 items then yield control
+        drained = 0
+        while drained < 20:
+            try:
+                event_type, data = q.get_nowait()
+                if event_type == "chunk":
+                    collected.append(data)
+                yield sse(event_type, data)
+                drained += 1
+            except Empty:
+                break
+        await asyncio.sleep(0.05)
+
+    # Drain any remaining items after the future completes
+    while not q.empty():
+        try:
+            event_type, data = q.get_nowait()
+            if event_type == "chunk":
+                collected.append(data)
+            yield sse(event_type, data)
+        except Empty:
+            break
+
+    # Get the final result from the future
     try:
-        collected_text = []
-        async for chunk in agent.stream_async(prompt):
-            # Strands yields different event types; we care about text deltas
-            if hasattr(chunk, "text") and chunk.text:
-                collected_text.append(chunk.text)
-                yield sse("chunk", chunk.text)
-            elif hasattr(chunk, "tool_use"):
-                tool_name = getattr(chunk.tool_use, "name", "tool")
-                yield sse("tool_use", f"Using tool: {tool_name}")
-            elif hasattr(chunk, "tool_result"):
-                yield sse("tool_result", "Tool completed")
-
-        yield sse("done", "".join(collected_text))
-
+        full_result = await future
     except Exception as exc:
         yield sse("error", f"Analysis failed: {exc}")
+        return
+
+    # If the model streamed tokens via on_llm_new_token, collected already has the
+    # full text. If not (some Bedrock configs don't stream at token level),
+    # full_result from the agent return value is the authoritative source.
+    final_text = "".join(collected) if collected else full_result
+    yield sse("done", final_text)
