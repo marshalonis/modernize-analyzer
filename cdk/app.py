@@ -19,7 +19,7 @@ env = cdk.Environment(
 # Configuration — override via CDK context or environment
 default_model_id = app.node.try_get_context("defaultModelId") or os.getenv(
     "DEFAULT_MODEL_ID",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "us.anthropic.claude-sonnet-4-5-20251001-v1:0",
 )
 
 network = NetworkStack(app, "ModernizerNetwork", env=env)
