@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Dave Marshalonis
+# See LICENSE file in the project root for full license text.
+
 """
 Strands agent that orchestrates modernization analysis.
 """

@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Dave Marshalonis
+# See LICENSE file in the project root for full license text.
+
 """
 FastAPI backend for the modernization analyzer.
 Exposes a streaming SSE endpoint consumed by the Streamlit frontend.

@@ -1,5 +1,7 @@
 # Modernization Analyzer
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 AI-powered GitLab repository modernization consultant.
 Analyzes codebases and produces detailed modernization reports across:
 - Code quality & patterns
@@ -106,3 +108,8 @@ make logs-frontend  # Tail frontend CloudWatch logs
 make diff           # Preview CDK changes before deploying
 make destroy        # Tear down all infrastructure
 ```
+
+## License
+
+This project is released under the [MIT License](LICENSE).
+© 2026 Dave Marshalonis. Provided as-is, without warranty of any kind.
