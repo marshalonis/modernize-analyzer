@@ -35,6 +35,35 @@ def fetch_available_models() -> tuple[list[dict], str]:
              "label": "Claude 3.5 Sonnet (recommended)"}], ""
 
 
+def format_chat_as_markdown(history: list[dict], repo_url: str, branch: str) -> str:
+    """Format conversation history as a readable markdown document."""
+    lines = [
+        "# Repository Q&A",
+        f"**Repository:** {repo_url}",
+        f"**Branch:** {branch}",
+        "",
+    ]
+    pairs = []
+    i = 0
+    while i < len(history):
+        if history[i]["role"] == "user":
+            question = history[i]["content"]
+            answer = history[i + 1]["content"] if i + 1 < len(history) and history[i + 1]["role"] == "assistant" else ""
+            pairs.append((question, answer))
+            i += 2
+        else:
+            i += 1
+    for idx, (q, a) in enumerate(pairs, 1):
+        lines += [
+            "---",
+            f"## Q{idx}: {q}",
+            "",
+            a,
+            "",
+        ]
+    return "\n".join(lines)
+
+
 def stream_events(endpoint: str, payload: dict):
     """
     POST to `endpoint` and yield parsed SSE events as (event_type, data) tuples.
@@ -326,8 +355,22 @@ with tab_chat:
                     {"role": "assistant", "content": answer_text}
                 )
 
-    # Button to clear conversation history
+    # Download and clear buttons
     if st.session_state.chat_history:
-        if st.button("🗑 Clear conversation", key="clear_chat"):
-            st.session_state.chat_history = []
-            st.rerun()
+        btn_col1, btn_col2 = st.columns([1, 1])
+        with btn_col1:
+            st.download_button(
+                label="⬇ Download Q&A (Markdown)",
+                data=format_chat_as_markdown(
+                    st.session_state.chat_history,
+                    gitlab_url.strip(),
+                    branch.strip() or "main",
+                ),
+                file_name="repo_qa.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with btn_col2:
+            if st.button("🗑 Clear conversation", key="clear_chat", use_container_width=True):
+                st.session_state.chat_history = []
+                st.rerun()
