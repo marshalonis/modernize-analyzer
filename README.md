@@ -20,7 +20,59 @@ Internet → Public ALB → Streamlit (ECS Fargate)
                                          GitLab repo (SSH or PAT)
 ```
 
-## Quick Start — Local Development
+## Quick Start — Standalone CLI (no Docker required)
+
+Run `analyze.py` directly against any GitLab repo from your terminal.
+
+**Prerequisites:** Python 3.10+, AWS credentials with Bedrock access, Claude model enabled in Bedrock.
+
+### 1. Set up a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+### 2. Install dependencies
+
+```bash
+pip install strands-agents boto3
+```
+
+### 3. Run the analyzer
+
+```bash
+# Full modernization analysis using a Personal Access Token
+export GITLAB_PAT=glpat-xxxx
+python analyze.py https://gitlab.com/myorg/myrepo
+
+# Pass the token directly
+python analyze.py https://gitlab.com/myorg/myrepo --credential glpat-xxxx
+
+# Analyze a specific branch and save the report
+python analyze.py https://gitlab.com/myorg/myrepo --branch develop --output report.md
+
+# Use SSH key authentication
+python analyze.py git@gitlab.com:myorg/myrepo.git --auth-type ssh --credential ~/.ssh/id_rsa
+
+# Ask a one-off question instead of a full analysis
+python analyze.py https://gitlab.com/myorg/myrepo --question "What auth mechanism does this app use?"
+
+# Override the model or AWS region
+python analyze.py https://gitlab.com/myorg/myrepo \
+    --model us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+    --region us-east-1
+```
+
+**Credential resolution order** (when `--credential` is omitted):
+- PAT mode: reads `GITLAB_PAT` or `GL_TOKEN` env var
+- SSH mode: reads `GITLAB_SSH_KEY` or `GL_SSH_KEY` env var, then falls back to `~/.ssh/id_rsa`
+
+Progress and tool activity stream to stderr; the report streams to stdout. Use `--output` to save a clean markdown file.
+
+---
+
+## Quick Start — Local Development (Docker)
 
 **Prerequisites:** Docker, AWS credentials with Bedrock access, Claude model enabled in Bedrock.
 
